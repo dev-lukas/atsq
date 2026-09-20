@@ -20,3 +20,12 @@ def test_enums_render_as_wire_values_in_commands() -> None:
     assert render_command(
         "sendtextmessage", targetmode=TargetMode.CLIENT, target=5, msg="x"
     ) == (b"sendtextmessage targetmode=1 target=5 msg=x")
+
+
+def test_ban_update_op_matches_notifybanupdate() -> None:
+    from atsq.definitions import BanUpdateOp
+
+    event = Event.from_line(b"notifybanupdate op=add banid=2 ip=203.0.113.7 mytsid")
+    assert event["op"] == BanUpdateOp.ADD
+    assert event["mytsid"] == ""
+    assert Event.from_line(b"notifybanupdate op=del banid=2")["op"] == BanUpdateOp.DEL

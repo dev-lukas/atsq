@@ -25,6 +25,10 @@ unless noted):
 |---|---|
 | `connect` / `Client.start/close` | used by every test; failure paths in `TestErrors` |
 | `use` / `server_id` | `TestSession`, `TestErrors.test_invalid_server_id` |
+| guest sessions (`password=None`) / `login` / `logout` | `TestGuestAccess` (guest is TS6-only; TS3 asserts the SSH refusal) |
+| `server_notify_unregister` (selective) | `TestSelectiveUnregister` |
+| `bans` event source / `BanUpdateOp` / `ban_find` | `TestBans` (TS3 asserts skip + error 256) |
+| `client_find` / `channel_find` / `client_list("mytsid", "streaming")` | `TestFindWrappers` |
 | `server_port` | `TestClientOptions.test_select_server_by_voice_port` |
 | `nickname` | `TestClientOptions.test_nickname_and_multi_event_registration` |
 | `register_events` (multi, `ALL_EVENTS`) | same |

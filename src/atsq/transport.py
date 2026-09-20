@@ -46,9 +46,9 @@ class SshTransport:
     """SSH query transport using :mod:`asyncssh`.
 
     Authentication happens at the SSH layer: the ServerQuery login name and
-    password double as SSH credentials (there is no in-band ``login``
-    command on the SSH interface). After auth a shell session carries the
-    plain ServerQuery line protocol.
+    password double as SSH credentials (in-band ``login``/``logout`` still
+    work afterwards). After auth a shell session carries the plain
+    ServerQuery line protocol.
     """
 
     def __init__(
@@ -70,7 +70,7 @@ class SshTransport:
         port: int = 10022,
         *,
         username: str,
-        password: str,
+        password: str | None = None,
         known_hosts: object = None,
         connect_timeout: float = 10.0,
         term_type: str | None = None,
@@ -78,11 +78,12 @@ class SshTransport:
     ) -> Self:
         """Open an SSH query session.
 
-        ``known_hosts=None`` (the default) disables host-key verification -
-        TeamSpeak servers generate ephemeral query host keys. Pass an
-        asyncssh ``known_hosts`` value to pin the key in production.
-        Extra ``ssh_options`` go to :func:`asyncssh.connect` verbatim
-        (e.g. ``kex_algs``/``encryption_algs`` for legacy TS3 sshd builds).
+        ``password=None`` authenticates with no password, which TS6 (beta13+)
+        accepts for the ``guest`` user. ``known_hosts=None`` (the default)
+        disables host-key verification - TeamSpeak servers generate ephemeral
+        query host keys. Pass an asyncssh ``known_hosts`` value to pin the key
+        in production. Extra ``ssh_options`` go to :func:`asyncssh.connect`
+        verbatim (e.g. ``kex_algs``/``encryption_algs`` for legacy TS3 sshd builds).
         """
         conn = await asyncssh.connect(
             host,
@@ -94,9 +95,7 @@ class SshTransport:
             **ssh_options,
         )
         try:
-            stdin, stdout, _stderr = await conn.open_session(
-                term_type=term_type, encoding=None
-            )
+            stdin, stdout, _stderr = await conn.open_session(term_type=term_type, encoding=None)
         except BaseException:  # pragma: no cover - session-open race
             conn.abort()
             raise

@@ -1,11 +1,14 @@
 # TS3 vs TS6 ServerQuery dialects
 
-Findings of `scripts/probe_dialect.py`, run 2026-07-09 against real servers:
+Findings of `scripts/probe_dialect.py`, run 2026-07-09 against real servers,
+plus a beta12/beta13 gap audit on 2026-09-20 (guest access, `bans` events,
+`banfind`, selective unregister; the `serverquerydocs` shipped in the image
+are byte-identical between beta11 and beta13):
 
 | | TS3 | TS6 |
 |---|---|---|
 | Image | `teamspeak:3.13` | `teamspeaksystems/teamspeak6-server:latest` |
-| Server version (`version`) | `3.13.7 build=1655727713` | `6.0.0-beta11 build=1781522651` |
+| Server version (`version`) | `3.13.7 build=1655727713` | `6.0.0-beta11 build=1781522651` (audit: `6.0.0-beta13`) |
 | SSH server | libssh 0.8.4 | libssh 0.11.3 |
 
 Raw transcripts: `tests/unit/fixtures/probe_ts3.log` / `probe_ts6.log`.
@@ -13,9 +16,9 @@ Raw transcripts: `tests/unit/fixtures/probe_ts3.log` / `probe_ts6.log`.
 ## Verdict
 
 **The wire protocol is effectively identical.** Every difference found is
-additive or cosmetic; no command, error code, event, framing or escaping
-difference affects atsq's core. All divergence handling lives in
-`src/atsq/dialect.py`.
+additive, except one: `servernotifyunregister event=X` is selective on TS6
+but drops *every* subscription on TS3. All divergence handling lives in
+`src/atsq/dialect.py` (`DialectQuirks`).
 
 ## Identical on both generations (probe-verified)
 
@@ -64,6 +67,15 @@ difference affects atsq's core. All divergence handling lives in
   connection stays usable after waiting (probed against non-allowlisted
   servers). atsq parses the hint and retries automatically
   (`flood_retries`, default 2).
+- **In-band `login` / `logout`** work over SSH on both. `logout` deselects
+  the virtual server and `login` does not restore it (`Client.login()`
+  re-runs `use`). A wrong in-band password answers `520` on both, and TS3
+  additionally SSH-bans the source IP for 600 s (`error 11`) — the query
+  allowlist does not exempt it. Never test wrong passwords against a shared
+  TS3.
+- **Multi-target `clientmove`**: `cid=1 clid=a|clid=b` (via `blocks=`) moves
+  several clients on both.
+- **Unknown `clientlist -flags`** are silently ignored on both.
 - **Snapshots**: `serversnapshotcreate` returns `version=3` + zstd/base64
   `data` on both; `serversnapshotdeploy version=… data=…` works via plain
   key=value exec (no positional payloads anywhere). Shared caveat: deploy
@@ -79,12 +91,19 @@ difference affects atsq's core. All divergence handling lives in
 | `clientinfo` / `notifycliententerview` | — | adds `client_is_streaming=0` | none needed |
 | `client_unique_identifier` length | SHA-1 base64 (28 chars) | SHA-256 base64 (44 chars) for voice clients | none needed (opaque string) |
 | Server config | `TS3SERVER_*` env, password only in first-boot log, allowlist at `/var/ts3server/query_ip_allowlist.txt`, query protocols opt-in `raw,ssh` | `TSSERVER_*` env, deterministic `TSSERVER_QUERY_ADMIN_PASSWORD`, allowlist at `/var/tsserver/query_ip_allowlist.txt`, `TSSERVER_QUERY_SSH_ENABLED=1`, no raw protocol at all | `docker/docker-compose.test.yml` |
+| **Guest SSH sessions** (beta13) | `guest` user refused at the SSH layer | `guest` connects with *any* password (none, empty, wrong); rights = Guest Server Query group; `login` elevates | `password` is optional everywhere |
+| `servernotifyregister event=bans` | `1539 parameter not found` | accepted; `banadd`/`bandel` emit `notifybanupdate op=add\|del` with the full ban row | `ALL_EVENTS` includes `bans`; skipped on TS3 (`DialectQuirks.event_sources`) |
+| `servernotifyunregister event=X` | **unregisters everything** (params accepted, ignored) | unregisters only X | `Client.server_notify_unregister()` re-registers the rest on TS3 |
+| `banfind ip=\|name=\|uid=\|mytsid=` | `256 command not found` | works; no match = `1281`; no filter = `1542` | `Client.ban_find()` maps 1281 → `[]` |
+| `clientlist -mytsid` / `-streaming` (beta11, undocumented) | ignored | adds `client_myteamspeak_id` / `client_is_streaming` | pass-through via `client_list("mytsid", "streaming")` |
+| `clientfind -cid -chuid property=` / `channelfind property=` | ignored (still matches nicknames) | honoured | `client_find()` / `channel_find()` |
+| Not live on beta13 despite `help` docs | — | `authenticationtoken`, `chatlogintoken`, `homebase*` → `256`; `ftgetchannelfilehttptoken` → `2 not implemented` | none |
 | **leftview on disconnect** (query clients) | emitted immediately for `quit` (reasonid=8), TCP abort/RST (reasonid=3) **and graceful SSH close** (reasonid=3) | emitted for `quit` (8) and abort/RST (3); **NOT emitted at all for a graceful SSH close** (verified: nothing within 65s) | `RawConnection.close()` sends a best-effort `quit` before closing, so atsq disconnects are observable on both generations |
 
 ## Consequences for the API (freeze decisions)
 
-1. `Dialect` stays, but the quirks table currently carries no behavioural
-   differences — it exists as the containment point for future beta drift.
+1. `Dialect` stays; `DialectQuirks` carries the event-source set and the
+   unregister semantics, the only behavioural differences found so far.
 2. AUTO detection sniffs the welcome line; anything unrecognised is treated
    as TS6 (the moving side). `version` remains available for explicit checks.
 3. Rows stay `dict[str, str]` — the additive TS6 fields arrive for free.

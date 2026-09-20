@@ -4,12 +4,12 @@ All TS3-vs-TS6 divergence must live in this module. Values below are taken
 from the recorded dialect probe (``scripts/probe_dialect.py``; transcripts in
 ``tests/unit/fixtures/probe_ts3.log`` / ``probe_ts6.log``, findings in
 ``docs/dialects.md``), run against teamspeak:3.13 (3.13.7) and
-teamspeaksystems/teamspeak6-server (6.0.0-beta11).
+teamspeaksystems/teamspeak6-server (6.0.0-beta11, re-audited on beta13).
 
 Probe verdict: the wire dialects are almost identical. Both greet with a
 literal ``TS3`` first line, frame lines as ``\\n\\r``, use the same escape
-table, the same error codes, and emit the same events. TS6 only *adds*
-fields (``virtualserver_uuid``, ``client_is_streaming``). The reliable
+table, the same error codes, and emit the same events. TS6 adds fields, the
+``bans`` event source and selective ``servernotifyunregister``. The reliable
 distinguishing marks are the second greeting line and the ``version``
 command.
 """
@@ -21,10 +21,10 @@ from dataclasses import dataclass
 
 __all__ = ["QUIRKS", "Dialect", "DialectQuirks", "sniff_dialect"]
 
-#: Second greeting line prefix that identifies a TS3-generation server.
-#: TS3: 'Welcome to the TeamSpeak 3 ServerQuery interface, ...'
-#: TS6: 'Welcome to the TeamSpeak ServerQuery interface, ...'
+#: Welcome-line prefix of a TS3 server; TS6 says "TeamSpeak ServerQuery" without the 3.
 _TS3_WELCOME_PREFIX = b"Welcome to the TeamSpeak 3 "
+
+_TS3_EVENT_SOURCES = frozenset({"server", "channel", "textserver", "textchannel", "textprivate"})
 
 
 class Dialect(enum.Enum):
@@ -36,21 +36,27 @@ class Dialect(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class DialectQuirks:
-    """Per-generation wire deviations.
+    """Per-generation wire deviations (all probe-verified)."""
 
-    Currently only the greeting length - the probe found no behavioural
-    divergence that the client must branch on. The type stays as the
-    containment point for future TS6-beta drift.
-    """
-
-    #: Total number of greeting lines to consume before commands may be sent.
-    #: (The first line is literally ``TS3`` on BOTH generations.)
+    #: Greeting lines to consume before commands may be sent (first one is ``TS3`` on both).
     greeting_lines: int
+    #: ``servernotifyregister event=`` values the server accepts.
+    event_sources: frozenset[str]
+    #: Whether ``servernotifyunregister event=X`` drops only X (TS3 silently drops all).
+    selective_unregister: bool
 
 
 QUIRKS: dict[Dialect, DialectQuirks] = {
-    Dialect.TS3: DialectQuirks(greeting_lines=2),
-    Dialect.TS6: DialectQuirks(greeting_lines=2),
+    Dialect.TS3: DialectQuirks(
+        greeting_lines=2,
+        event_sources=_TS3_EVENT_SOURCES,
+        selective_unregister=False,
+    ),
+    Dialect.TS6: DialectQuirks(
+        greeting_lines=2,
+        event_sources=_TS3_EVENT_SOURCES | {"bans"},
+        selective_unregister=True,
+    ),
 }
 
 

@@ -21,15 +21,12 @@ import itertools
 import zlib
 from typing import TYPE_CHECKING, Any
 
-from atsq.errors import ConnectionClosedError, QueryError, QueryTimeoutError
+from atsq.errors import EMPTY_RESULT_SET_ID, ConnectionClosedError, QueryError, QueryTimeoutError
 
 if TYPE_CHECKING:
     from atsq.client import Client
 
 __all__ = ["FileTransfer"]
-
-#: ``ftgetfilelist`` on an empty directory answers with this error id.
-_EMPTY_RESULT_SET = 1281
 
 
 class FileTransfer:
@@ -121,8 +118,7 @@ class FileTransfer:
                         return await reader.readexactly(size)
                     except asyncio.IncompleteReadError as err:
                         raise ConnectionClosedError(
-                            f"file download {name!r} ended after "
-                            f"{len(err.partial)}/{size} bytes"
+                            f"file download {name!r} ended after {len(err.partial)}/{size} bytes"
                         ) from err
                 finally:
                     writer.close()
@@ -130,9 +126,7 @@ class FileTransfer:
         except TimeoutError as err:
             raise QueryTimeoutError(f"file download {name!r} timed out") from err
 
-    # -- icons ---------------------------------------------------------------
-    # Server icons live as ``/icon_<crc32>`` files in cid 0; the crc32 of the
-    # image bytes doubles as the icon id referenced by ``i_icon_id`` perms.
+    # -- icons: ``/icon_<crc32>`` files in cid 0, crc32 doubles as the icon id --
 
     async def upload_icon(self, data: bytes) -> int:
         """Upload an icon and return its icon id (crc32 of the bytes)."""
@@ -156,9 +150,8 @@ class FileTransfer:
                 "ftgetfilelist", cid=cid, cpw=channel_password, path=path
             )
         except QueryError as err:
-            # Both generations report an empty directory as error 1281
-            # ("database empty result set") instead of zero rows.
-            if err.error_id == _EMPTY_RESULT_SET:
+            # Both generations report an empty directory as 1281 instead of zero rows.
+            if err.error_id == EMPTY_RESULT_SET_ID:
                 return []
             raise
 
@@ -170,9 +163,7 @@ class FileTransfer:
         )
         return rows[0]
 
-    async def delete_file(
-        self, name: str, cid: int | str = 0, channel_password: str = ""
-    ) -> None:
+    async def delete_file(self, name: str, cid: int | str = 0, channel_password: str = "") -> None:
         await self._client.exec(
             "ftdeletefile", cid=cid, cpw=channel_password, name=_normalize(name)
         )
@@ -206,9 +197,7 @@ class FileTransfer:
         row = rows[0] if rows else {}
         if "ftkey" not in row:
             # Init failures arrive as status/msg in the row, not as an error line.
-            raise QueryError(
-                int(row.get("status", "-1")), row.get("msg", f"{cmd} failed"), row
-            )
+            raise QueryError(int(row.get("status", "-1")), row.get("msg", f"{cmd} failed"), row)
         return row
 
     async def _open_data_channel(

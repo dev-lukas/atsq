@@ -237,9 +237,7 @@ async def test_close_is_idempotent_and_stops_everything() -> None:
 
 
 async def test_close_sends_quit() -> None:
-    # TS6 emits no notifyclientleftview for query clients that silently drop
-    # the connection; a clean `quit` produces one on both generations, so
-    # close() must send it (fire-and-forget) before tearing down.
+    # TS6 emits no leftview for a silently dropped query session; `quit` does on both.
     transport = FakeTransport()
     async with make_conn(transport):
         pass

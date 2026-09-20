@@ -31,8 +31,8 @@ from atsq.connection import (
     DEFAULT_KEEPALIVE_INTERVAL,
     RawConnection,
 )
-from atsq.dialect import Dialect
-from atsq.errors import ConnectionClosedError, QueryError
+from atsq.dialect import QUIRKS, Dialect
+from atsq.errors import EMPTY_RESULT_SET_ID, ConnectionClosedError, QueryError
 from atsq.transport import SshTransport, Transport
 
 if TYPE_CHECKING:
@@ -62,13 +62,14 @@ LOG = logging.getLogger(__name__)
 ANY_EVENT = "*"
 
 #: Every notification source ServerQuery offers - pass as ``register_events``
-#: to hear everything (channel events are anchored at channel 0 = all).
+#: to hear everything; sources the dialect lacks (``bans`` on TS3) are skipped.
 ALL_EVENTS: tuple[str | tuple[str, int], ...] = (
     "server",
     ("channel", 0),
     "textserver",
     "textchannel",
     "textprivate",
+    "bans",
 )
 
 
@@ -102,6 +103,9 @@ class Client:
     :func:`connect`) for a single connection, or :meth:`run_forever` to let
     the client own connect/reconnect and dispatch events to ``@client.on``
     handlers.
+
+    ``username="guest"`` with no password opens a TS6 guest session
+    (beta13+); :meth:`login` can elevate it later.
     """
 
     def __init__(
@@ -109,13 +113,12 @@ class Client:
         host: str,
         port: int = 10022,
         *,
-        password: str,
+        password: str | None = None,
         username: str = "serveradmin",
         server_id: int | None = None,
         server_port: int | None = None,
         nickname: str | None = None,
-        register_events: str | EventRegistration | Sequence[str | EventRegistration]
-        | None = None,
+        register_events: str | EventRegistration | Sequence[str | EventRegistration] | None = None,
         dialect: Dialect = Dialect.AUTO,
         command_timeout: float = DEFAULT_COMMAND_TIMEOUT,
         keepalive_interval: float = DEFAULT_KEEPALIVE_INTERVAL,
@@ -143,6 +146,8 @@ class Client:
         self._flood_retries = flood_retries
 
         self._conn: RawConnection | None = None
+        #: Registrations active on the current connection (TS3 unregister needs them).
+        self._registrations: list[tuple[str, int | None]] = []
         self._handlers: dict[str, list[EventHandler]] = {}
         self._stopping = False
 
@@ -159,26 +164,37 @@ class Client:
             event_queue_size=self._event_queue_size,
             flood_retries=self._flood_retries,
         )
+        self._registrations = []
         try:
             await conn.start()
-            if self._server_id is not None:
-                await conn.exec("use", sid=self._server_id)
-            elif self._server_port is not None:
-                await conn.exec("use", port=self._server_port)
+            await self._select_server(conn)
             if self._nickname is not None:
                 try:
                     await conn.exec("clientupdate", client_nickname=self._nickname)
                 except QueryError as err:
-                    # A nickname collision (e.g. a lingering previous session)
-                    # must not break the connection - the nick is cosmetic.
+                    # A nickname collision (lingering old session) must not break connect.
                     LOG.warning("atsq: could not set nickname %r: %s", self._nickname, err)
             for event, channel_id in self._register_events:
-                await conn.exec("servernotifyregister", event=event, id=channel_id)
+                await self._register(conn, event, channel_id)
         except BaseException:
             await conn.close()
             raise
         self._conn = conn
         return self
+
+    async def _select_server(self, conn: RawConnection) -> None:
+        if self._server_id is not None:
+            await conn.exec("use", sid=self._server_id)
+        elif self._server_port is not None:
+            await conn.exec("use", port=self._server_port)
+
+    async def _register(self, conn: RawConnection, event: str, channel_id: int | None) -> None:
+        if event not in QUIRKS[conn.dialect].event_sources:
+            LOG.info("atsq: %s has no %r event source, skipping", conn.dialect.value, event)
+            return
+        await conn.exec("servernotifyregister", event=event, id=channel_id)
+        if (event, channel_id) not in self._registrations:
+            self._registrations.append((event, channel_id))
 
     async def close(self) -> None:
         """Disconnect and stop :meth:`run_forever`. Idempotent."""
@@ -310,15 +326,48 @@ class Client:
     async def send_keepalive(self) -> None:
         await self.connection.send_keepalive()
 
-    # -- typed convenience commands -----------------------------------------
-    # Thin wrappers over exec() for the commands a bot actually uses. Rows
-    # are plain dict[str, str]; TS6-only fields simply appear as extra keys.
+    # -- typed convenience commands: thin exec() wrappers, rows stay dict[str, str] --
 
     async def use(self, sid: int) -> None:
         await self.exec("use", sid=sid)
 
+    async def login(self, username: str, password: str) -> None:
+        """In-band ``login`` (elevates a guest session), then re-``use``.
+
+        Works over SSH on both generations. ``login``/``logout`` reset the
+        selected virtual server, so the configured one is selected again.
+        A wrong password raises :class:`QueryError` 520 - and TS3 then bans
+        the source IP from SSH for 600 s, allowlist or not.
+        """
+        await self.exec("login", client_login_name=username, client_login_password=password)
+        await self._select_server(self.connection)
+
+    async def logout(self) -> None:
+        """In-band ``logout``: back to guest privileges, virtual server deselected."""
+        await self.exec("logout")
+
     async def server_notify_register(self, event: str = "server", id: int | None = None) -> None:
-        await self.exec("servernotifyregister", event=event, id=id)
+        """Subscribe to an event source (``bans`` is TS6-only and skipped on TS3)."""
+        await self._register(self.connection, event, id)
+
+    async def server_notify_unregister(
+        self, event: str | None = None, id: int | None = None
+    ) -> None:
+        """Unsubscribe from one event source, or from everything when *event* is None.
+
+        TS6 honours ``event``; TS3 silently drops every subscription, so
+        there the remaining ones are registered again to keep the semantics.
+        """
+        conn = self.connection
+        if event is None:
+            await conn.exec("servernotifyunregister")
+            self._registrations = []
+            return
+        await conn.exec("servernotifyunregister", event=event, id=id)
+        self._registrations = [r for r in self._registrations if r != (event, id)]
+        if not QUIRKS[conn.dialect].selective_unregister:
+            for kept_event, kept_id in self._registrations:
+                await conn.exec("servernotifyregister", event=kept_event, id=kept_id)
 
     async def whoami(self) -> dict[str, str]:
         return (await self.exec("whoami"))[0]
@@ -327,11 +376,43 @@ class Client:
         return (await self.exec("version"))[0]
 
     async def client_list(self, *options: str) -> list[dict[str, str]]:
-        """``client_list("uid", "away")`` renders as ``clientlist -uid -away``."""
+        """``client_list("uid", "away")`` renders as ``clientlist -uid -away``.
+
+        TS6 also takes the undocumented ``mytsid`` (``client_myteamspeak_id``)
+        and ``streaming`` (``client_is_streaming``) flags; TS3 ignores them.
+        """
         return await self.exec("clientlist", *options)
 
     async def client_info(self, clid: int | str) -> dict[str, str]:
         return (await self.exec("clientinfo", clid=clid))[0]
+
+    async def client_find(
+        self, pattern: str, *options: str, property: str | None = None
+    ) -> list[dict[str, str]]:
+        """``clientfind``; ``property=``/``-cid``/``-chuid`` are TS6-only (TS3 ignores them)."""
+        return await self.exec("clientfind", *options, pattern=pattern, property=property)
+
+    async def channel_find(self, pattern: str, property: str | None = None) -> list[dict[str, str]]:
+        """``channelfind``; ``property=`` is TS6-only (TS3 ignores it)."""
+        return await self.exec("channelfind", pattern=pattern, property=property)
+
+    async def ban_find(
+        self,
+        *,
+        ip: str | None = None,
+        name: str | None = None,
+        uid: str | None = None,
+        mytsid: str | None = None,
+    ) -> list[dict[str, str]]:
+        """``banfind`` (TS6-only; TS3 answers 256): matching bans, ``[]`` when none."""
+        if ip is name is uid is mytsid is None:
+            raise ValueError("ban_find needs at least one of ip, name, uid, mytsid")
+        try:
+            return await self.exec("banfind", ip=ip, name=name, uid=uid, mytsid=mytsid)
+        except QueryError as err:
+            if err.error_id == EMPTY_RESULT_SET_ID:
+                return []
+            raise
 
     async def client_dbid_from_uid(self, cluid: str) -> str:
         rows = await self.exec("clientgetdbidfromuid", cluid=cluid)
@@ -356,9 +437,7 @@ class Client:
         rows = await self.exec("channelcreate", channel_name=channel_name, **props)
         return rows[0]["cid"]
 
-    async def channel_add_perm(
-        self, cid: int | str, permsid: str, permvalue: int | str
-    ) -> None:
+    async def channel_add_perm(self, cid: int | str, permsid: str, permvalue: int | str) -> None:
         await self.exec("channeladdperm", cid=cid, permsid=permsid, permvalue=permvalue)
 
     async def channel_client_add_perm(
@@ -368,14 +447,10 @@ class Client:
             "channelclientaddperm", cid=cid, cldbid=cldbid, permsid=permsid, permvalue=permvalue
         )
 
-    async def channel_move(
-        self, cid: int | str, cpid: int | str, order: int | None = None
-    ) -> None:
+    async def channel_move(self, cid: int | str, cpid: int | str, order: int | None = None) -> None:
         await self.exec("channelmove", cid=cid, cpid=cpid, order=order)
 
-    async def send_text_message(
-        self, target: int | str, msg: str, targetmode: int = 1
-    ) -> None:
+    async def send_text_message(self, target: int | str, msg: str, targetmode: int = 1) -> None:
         await self.exec("sendtextmessage", targetmode=targetmode, target=target, msg=msg)
 
     async def client_kick(
@@ -392,7 +467,7 @@ async def connect(
     host: str,
     port: int = 10022,
     *,
-    password: str,
+    password: str | None = None,
     username: str = "serveradmin",
     server_id: int | None = None,
     register_events: str | None = None,

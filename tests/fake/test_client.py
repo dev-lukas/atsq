@@ -91,9 +91,7 @@ async def test_nickname_and_server_port_and_multi_events() -> None:
 async def test_nickname_collision_does_not_break_connect() -> None:
     transport = FakeTransport()
     transport.when(b"use ", [OK])
-    transport.when(
-        b"clientupdate", [b"error id=513 msg=nickname\\sis\\salready\\sin\\suse"]
-    )
+    transport.when(b"clientupdate", [b"error id=513 msg=nickname\\sis\\salready\\sin\\suse"])
 
     async def factory() -> FakeTransport:
         return transport
@@ -264,9 +262,7 @@ async def test_run_forever_banned_uses_banned_delay() -> None:
         ready.set()
 
     task = asyncio.create_task(
-        client.run_forever(
-            on_ready=on_ready, initial_delay=60.0, max_delay=60.0, banned_delay=0.01
-        )
+        client.run_forever(on_ready=on_ready, initial_delay=60.0, max_delay=60.0, banned_delay=0.01)
     )
     # The banned error must select banned_delay (0.01s), not initial_delay
     # (60s): ready within the test timeout proves the banned path was taken.
@@ -359,9 +355,7 @@ async def test_connect_function_cleans_up_on_failure() -> None:
 
     farm = TransportFarm(banned_first=1)
     with pytest.raises(QueryError):
-        await connect(
-            "h", password="p", server_id=1, transport_factory=farm, keepalive_interval=0
-        )
+        await connect("h", password="p", server_id=1, transport_factory=farm, keepalive_interval=0)
     assert farm.transports[0].is_closed
 
 
@@ -429,3 +423,139 @@ class TestTypedWrappers:
             b"servernotifyregister event=server",
             b"quit",
         ]
+
+
+TS6_GREETING = [
+    b"TS3",
+    b'Welcome to the TeamSpeak ServerQuery interface, type "help" for a list of commands.',
+]
+
+
+def _single(transport: FakeTransport, **kwargs: object) -> Client:
+    async def factory() -> FakeTransport:
+        return transport
+
+    kwargs.setdefault("keepalive_interval", 0)
+    return Client("unused-host", transport_factory=factory, **kwargs)  # type: ignore[arg-type]
+
+
+def _sent(transport: FakeTransport, prefix: bytes) -> list[bytes]:
+    return [line for line in transport.sent if line.startswith(prefix)]
+
+
+async def test_password_is_optional_for_guest_sessions() -> None:
+    farm = TransportFarm()
+    client = Client("unused-host", username="guest", transport_factory=farm, keepalive_interval=0)
+    async with await client.start() as client:
+        assert client.connected
+
+
+async def test_all_events_registers_bans_only_on_ts6() -> None:
+    from atsq import ALL_EVENTS
+
+    transport = FakeTransport(greeting=TS6_GREETING)
+    transport.when(b"", [OK])
+    client = _single(transport, register_events=ALL_EVENTS)
+    await client.start()
+    await client.close()
+    assert _sent(transport, b"servernotifyregister")[-1] == b"servernotifyregister event=bans"
+
+    transport = FakeTransport()
+    transport.when(b"", [OK])
+    client = _single(transport, register_events=["server", "bans"])
+    await client.start()
+    await client.server_notify_register("bans")
+    await client.close()
+    assert _sent(transport, b"servernotifyregister") == [b"servernotifyregister event=server"]
+
+
+async def test_unregister_one_source_reregisters_the_rest_on_ts3() -> None:
+    transport = FakeTransport()
+    transport.when(b"", [OK])
+    client = _single(transport, register_events=["server", "textserver", ("channel", 0)])
+    await client.start()
+    await client.server_notify_register("server")  # duplicate: tracked once
+    del transport.sent[:]
+    await client.server_notify_unregister("textserver")
+    assert transport.sent == [
+        b"servernotifyunregister event=textserver",
+        b"servernotifyregister event=server",
+        b"servernotifyregister event=channel id=0",
+    ]
+    del transport.sent[:]
+    await client.server_notify_unregister()
+    await client.server_notify_unregister("server")
+    assert transport.sent == [b"servernotifyunregister", b"servernotifyunregister event=server"]
+    await client.close()
+
+
+async def test_unregister_is_selective_on_ts6() -> None:
+    transport = FakeTransport(greeting=TS6_GREETING)
+    transport.when(b"", [OK])
+    client = _single(transport, register_events=["server", "textserver"])
+    await client.start()
+    del transport.sent[:]
+    await client.server_notify_unregister("textserver")
+    assert transport.sent == [b"servernotifyunregister event=textserver"]
+    await client.close()
+
+
+async def test_login_reselects_server_and_logout() -> None:
+    transport = FakeTransport()
+    transport.when(b"login", [OK], [b"error id=520 msg=invalid\\sloginname\\sor\\spassword"])
+    transport.when(b"", [OK])
+    client = _single(transport, server_id=3)
+    await client.start()
+    del transport.sent[:]
+    await client.login("serveradmin", "p w")
+    await client.logout()
+    assert transport.sent == [
+        rb"login client_login_name=serveradmin client_login_password=p\sw",
+        b"use sid=3",
+        b"logout",
+    ]
+    with pytest.raises(QueryError, match="520"):
+        await client.login("serveradmin", "wrong")
+    await client.close()
+
+
+async def test_ban_find_maps_empty_result_and_requires_a_filter() -> None:
+    transport = FakeTransport()
+    transport.when(b"banfind ip=", [b"banid=7 ip=1.2.3.4 mytsid", OK])
+    transport.when(b"banfind name=", [b"error id=1281 msg=database\\sempty\\sresult\\sset"])
+    transport.when(b"banfind uid=", [b"error id=256 msg=command\\snot\\sfound"])
+    transport.when(b"", [OK])
+    client = _single(transport)
+    await client.start()
+    assert await client.ban_find(ip="1.2.3.4") == [{"banid": "7", "ip": "1.2.3.4", "mytsid": ""}]
+    assert await client.ban_find(name="nobody") == []
+    with pytest.raises(QueryError, match="256"):
+        await client.ban_find(uid="x")
+    with pytest.raises(ValueError):
+        await client.ban_find()
+    await client.close()
+    assert _sent(transport, b"banfind") == [
+        b"banfind ip=1.2.3.4",
+        b"banfind name=nobody",
+        b"banfind uid=x",
+    ]
+
+
+async def test_find_wrappers_wire_bytes() -> None:
+    transport = FakeTransport()
+    transport.when(b"clientfind", [b"clid=4 client_nickname=bob cid=1 chuid=u", OK])
+    transport.when(b"channelfind", [b"cid=1 channel_name=Lounge", OK])
+    transport.when(b"", [OK])
+    client = _single(transport)
+    await client.start()
+    assert (await client.client_find("bob", "cid", "chuid"))[0]["chuid"] == "u"
+    await client.client_find("1", property="client_type")
+    assert (await client.channel_find("Lou"))[0]["cid"] == "1"
+    await client.channel_find("1", property="channel_flag_permanent")
+    await client.close()
+    assert transport.sent[:-1] == [
+        b"clientfind pattern=bob -cid -chuid",
+        b"clientfind pattern=1 property=client_type",
+        b"channelfind pattern=Lou",
+        b"channelfind pattern=1 property=channel_flag_permanent",
+    ]

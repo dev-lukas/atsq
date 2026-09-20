@@ -47,9 +47,10 @@ await client.run_forever()   # reconnects with backoff; keepalive automatic
 ```python
 async with await atsq.connect("ts.example.com", 10022,
                               password="...", server_id=1) as ts:
-    for row in await ts.client_list("uid"):
+    for row in await ts.client_list("uid", "mytsid"):    # -mytsid: TS6 only
         print(row["clid"], row["client_nickname"])
     cid = await ts.channel_create("Lounge", channel_flag_permanent=1)
+    bans = await ts.ban_find(ip="203.0.113.7")            # TS6 only, [] if none
 ```
 
 Pull-style event consumption instead of handlers:
@@ -136,6 +137,13 @@ except atsq.ConnectionClosedError:  # connection gone
 - **close() sends `quit`**: on TS6 a query client that silently drops the SSH
   connection never produces a `notifyclientleftview`; a clean `quit` does (on
   both generations).
+- **Guest sessions (TS6 beta13+)**: `atsq.connect(host, username="guest")`
+  needs no password; `await ts.login("serveradmin", pw)` elevates in-band
+  (and re-selects the virtual server, which `login`/`logout` reset).
+- **Event sources**: `ALL_EVENTS` includes the TS6-only `bans` source
+  (`banupdate` events with `op=add|del`); it is skipped on TS3.
+  `server_notify_unregister("textserver")` is selective on both generations
+  (TS3 drops everything, so atsq re-registers the rest).
 - **Snapshots** work via plain `exec("serversnapshotcreate")` /
   `exec("serversnapshotdeploy", version=..., data=...)` — deploy deselects the
   session; call `use` again afterwards.

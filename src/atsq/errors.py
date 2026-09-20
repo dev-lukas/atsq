@@ -14,6 +14,8 @@ __all__ = [
 
 #: Server error id signalling flood protection ("client is flooding").
 FLOOD_ERROR_ID = 524
+#: "database empty result set": some list commands answer this instead of zero rows.
+EMPTY_RESULT_SET_ID = 1281
 
 
 class TsqError(Exception):

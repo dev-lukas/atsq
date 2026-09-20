@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+import asyncssh
 import pytest
 
 import atsq
@@ -59,12 +60,8 @@ class TestSession:
 
 
 class TestEscaping:
-    async def test_channel_name_round_trip(
-        self, client: atsq.Client, run_token: str
-    ) -> None:
-        # Space, pipe, slash, backslash. No control chars: both generations
-        # sanitize e.g. tabs OUT of channel names server-side (verified),
-        # so those are covered by the text-message round-trip instead.
+    async def test_channel_name_round_trip(self, client: atsq.Client, run_token: str) -> None:
+        # Space, pipe, slash, backslash; control chars are stripped from channel names server-side.
         name = f"atsq it |{run_token}| a/b\\c end"
         cid = await client.channel_create(name, channel_flag_permanent=1)
         rows = await client.exec("channellist")
@@ -133,9 +130,7 @@ class TestQueryClientContracts:
 
 
 class TestTransportLifecycle:
-    async def test_close_idempotent_and_io_after_close_raises(
-        self, server: ServerTarget
-    ) -> None:
+    async def test_close_idempotent_and_io_after_close_raises(self, server: ServerTarget) -> None:
         from atsq.transport import SshTransport
 
         transport = await SshTransport.connect(
@@ -177,9 +172,7 @@ class TestEvents:
         self, client: atsq.Client, server: ServerTarget
     ) -> None:
         await client.server_notify_register("server")
-        second = await atsq.connect(
-            server.host, server.port, password=server.password, server_id=1
-        )
+        second = await atsq.connect(server.host, server.port, password=server.password, server_id=1)
         try:
             enter = await client.wait_for_event(timeout=10)
             assert enter.name == "cliententerview"
@@ -187,8 +180,7 @@ class TestEvents:
             assert enter["client_type"] == "1"
             joined_clid = enter["clid"]
         finally:
-            # close() sends `quit` - required on TS6, where a bare SSH
-            # disconnect produces no leftview at all (docs/dialects.md).
+            # close() sends `quit`: a bare SSH disconnect yields no leftview on TS6.
             await second.close()
         left = await client.wait_for_event(timeout=10)
         assert left.name == "clientleftview"
@@ -196,13 +188,9 @@ class TestEvents:
         assert left["reasonid"] in atsq.LEAVE_REASONS
         assert left["clid"] == joined_clid
 
-    async def test_text_message_event(
-        self, client: atsq.Client, server: ServerTarget
-    ) -> None:
+    async def test_text_message_event(self, client: atsq.Client, server: ServerTarget) -> None:
         await client.server_notify_register("textserver")
-        second = await atsq.connect(
-            server.host, server.port, password=server.password, server_id=1
-        )
+        second = await atsq.connect(server.host, server.port, password=server.password, server_id=1)
         try:
             payload = "atsq it |pipe| a/b\\c\tend"
             await second.send_text_message(0, payload, targetmode=3)
@@ -328,9 +316,7 @@ class TestClientOptions:
             await c.close()
 
     async def test_select_server_by_voice_port(self, server: ServerTarget) -> None:
-        c = await atsq.connect(
-            server.host, server.port, password=server.password, server_port=9987
-        )
+        c = await atsq.connect(server.host, server.port, password=server.password, server_port=9987)
         try:
             assert (await c.whoami())["virtualserver_id"] == "1"
         finally:
@@ -338,9 +324,7 @@ class TestClientOptions:
 
 
 class TestSnapshots:
-    async def test_snapshot_create_and_deploy_round_trip(
-        self, client: atsq.Client
-    ) -> None:
+    async def test_snapshot_create_and_deploy_round_trip(self, client: atsq.Client) -> None:
         """Snapshots need no special payload handling - plain exec works."""
         rows = await client.exec("serversnapshotcreate")
         snapshot = rows[0]
@@ -349,9 +333,7 @@ class TestSnapshots:
         await client.exec(
             "serversnapshotdeploy", version=snapshot["version"], data=snapshot["data"]
         )
-        # Deploy recreates the virtual server and deselects the session
-        # (whoami reports virtualserver_id=0) on both generations - callers
-        # must re-`use` afterwards.
+        # Deploy recreates the virtual server and deselects the session on both.
         assert (await client.whoami())["virtualserver_id"] == "0"
         await client.use(1)
         assert (await client.whoami())["virtualserver_id"] == "1"
@@ -361,9 +343,7 @@ class TestPipelining:
     async def test_piped_permission_blocks_apply_in_one_command(
         self, client: atsq.Client, run_token: str
     ) -> None:
-        cid = await client.channel_create(
-            f"atsq pipe {run_token}", channel_flag_permanent=1
-        )
+        cid = await client.channel_create(f"atsq pipe {run_token}", channel_flag_permanent=1)
         await client.exec(
             "channeladdperm",
             cid=cid,
@@ -388,9 +368,7 @@ class TestFileTransfer:
     async def test_upload_list_download_delete_round_trip(
         self, client: atsq.Client, ft: atsq.FileTransfer, run_token: str
     ) -> None:
-        cid = int(await client.channel_create(
-            f"atsq ft {run_token}", channel_flag_permanent=1
-        ))
+        cid = int(await client.channel_create(f"atsq ft {run_token}", channel_flag_permanent=1))
         payload = bytes(range(256)) * 64  # 16 KiB covering every byte value
         await ft.upload(payload, "/atsq-test.bin", cid=cid)
 
@@ -411,9 +389,7 @@ class TestFileTransfer:
     async def test_directory_create_and_rename(
         self, client: atsq.Client, ft: atsq.FileTransfer, run_token: str
     ) -> None:
-        cid = int(await client.channel_create(
-            f"atsq ftdir {run_token}", channel_flag_permanent=1
-        ))
+        cid = int(await client.channel_create(f"atsq ftdir {run_token}", channel_flag_permanent=1))
         await ft.create_directory("/sub", cid=cid)
         await ft.upload(b"hello atsq", "/sub/a.txt", cid=cid)
         await ft.rename_file("/sub/a.txt", "/sub/b.txt", cid=cid)
@@ -439,9 +415,7 @@ class TestFileTransfer:
     async def test_overwrite_false_surfaces_conflict(
         self, client: atsq.Client, ft: atsq.FileTransfer, run_token: str
     ) -> None:
-        cid = int(await client.channel_create(
-            f"atsq ftow {run_token}", channel_flag_permanent=1
-        ))
+        cid = int(await client.channel_create(f"atsq ftow {run_token}", channel_flag_permanent=1))
         await ft.upload(b"one", "/dup.bin", cid=cid)
         with pytest.raises(atsq.QueryError):
             await ft.upload(b"two", "/dup.bin", cid=cid, overwrite=False)
@@ -466,3 +440,110 @@ class TestFlood:
                 await asyncio.sleep(1)
         assert (await client.whoami())["virtualserver_id"] == "1"
         assert flood_errors <= 5, "allowlisted client should be mostly exempt"
+
+
+class TestGuestAccess:
+    async def test_guest_session_and_login_elevation(
+        self, server: ServerTarget, run_token: str
+    ) -> None:
+        if server.expected_dialect is atsq.Dialect.TS3:
+            with pytest.raises(asyncssh.PermissionDenied):
+                await atsq.connect(server.host, server.port, username="guest")
+            return
+        c = await atsq.connect(server.host, server.port, username="guest", server_id=1)
+        try:
+            me = await c.whoami()
+            assert me["client_login_name"] == ""
+            assert me["virtualserver_id"] == "1"
+            with pytest.raises(atsq.QueryError, match="2568"):
+                await c.client_list()
+            await c.login("serveradmin", server.password)
+            me = await c.whoami()
+            assert me["client_login_name"] == "serveradmin"
+            assert me["virtualserver_id"] == "1"
+            assert await c.client_list()
+        finally:
+            await c.close()
+
+    async def test_in_band_logout_deselects_and_login_reselects(
+        self, client: atsq.Client, server: ServerTarget
+    ) -> None:
+        # No wrong-password attempt here: TS3 would SSH-ban the runner IP for 600 s.
+        await client.logout()
+        me = await client.whoami()
+        assert (me["client_login_name"], me["virtualserver_id"]) == ("", "0")
+        await client.login("serveradmin", server.password)
+        me = await client.whoami()
+        assert (me["client_login_name"], me["virtualserver_id"]) == ("serveradmin", "1")
+
+
+class TestBans:
+    async def test_ban_events_and_ban_find(
+        self, client: atsq.Client, server: ServerTarget, run_token: str
+    ) -> None:
+        ip = f"203.0.113.{int(run_token, 16) % 200 + 1}"
+        await client.server_notify_register("bans")  # skipped on TS3
+        banid = (await client.exec("banadd", ip=ip, time=60, banreason="atsq"))[0]["banid"]
+        try:
+            if server.expected_dialect is atsq.Dialect.TS3:
+                with pytest.raises(atsq.QueryError, match="256"):
+                    await client.ban_find(ip=ip)
+                with pytest.raises(atsq.QueryTimeoutError):
+                    await client.wait_for_event(timeout=2)
+                return
+            added = await client.wait_for_event(timeout=10)
+            assert (added.name, added["op"], added["banid"]) == ("banupdate", "add", banid)
+            assert added["op"] == atsq.BanUpdateOp.ADD
+            assert added["ip"] == ip
+            rows = await client.ban_find(ip=ip)
+            assert [r["banid"] for r in rows] == [banid]
+            assert rows[0]["reason"] == "atsq"
+            assert await client.ban_find(mytsid="no-such-mytsid") == []
+        finally:
+            await client.exec("bandel", banid=banid)
+        deleted = await client.wait_for_event(timeout=10)
+        assert (deleted.name, deleted["op"], deleted["banid"]) == ("banupdate", "del", banid)
+
+
+class TestSelectiveUnregister:
+    async def test_unregister_one_source_keeps_the_others(
+        self, client: atsq.Client, server: ServerTarget
+    ) -> None:
+        await client.server_notify_register("server")
+        await client.server_notify_register("textserver")
+        await client.server_notify_unregister("textserver")
+        await client.send_text_message(0, "unheard", targetmode=3)
+        second = await atsq.connect(server.host, server.port, password=server.password, server_id=1)
+        try:
+            event = await client.wait_for_event(timeout=10)
+            assert event.name == "cliententerview"
+        finally:
+            await second.close()
+        left = await client.wait_for_event(timeout=10)
+        assert left.name == "clientleftview"
+        await client.server_notify_unregister()
+        await client.send_text_message(0, "unheard", targetmode=3)
+        with pytest.raises(atsq.QueryTimeoutError):
+            await client.wait_for_event(timeout=2)
+
+
+class TestFindWrappers:
+    async def test_client_find_channel_find_and_ts6_clientlist_flags(
+        self, client: atsq.Client, server: ServerTarget
+    ) -> None:
+        me = await client.whoami()
+        ts6 = server.expected_dialect is atsq.Dialect.TS6
+        found = await client.client_find(me["client_nickname"], "cid", "chuid")
+        mine = next(r for r in found if r["clid"] == me["client_id"])
+        assert ("cid" in mine, "chuid" in mine) == (ts6, ts6)
+        if ts6:
+            by_type = await client.client_find("1", property="client_type")
+            assert all(r["client_type"] == "1" for r in by_type)
+            assert me["client_id"] in {r["clid"] for r in by_type}
+        else:  # TS3 ignores property= and keeps matching nicknames
+            by_type = await client.client_find(me["client_nickname"], property="client_type")
+            assert me["client_id"] in {r["clid"] for r in by_type}
+        default = await client.channel_find("Default")
+        assert default[0]["cid"] == me["client_channel_id"]
+        row = (await client.client_list("mytsid", "streaming"))[0]
+        assert ("client_myteamspeak_id" in row, "client_is_streaming" in row) == (ts6, ts6)

@@ -15,6 +15,7 @@ import enum
 
 __all__ = [
     "LEAVE_REASONS",
+    "BanUpdateOp",
     "ClientType",
     "ReasonId",
     "TargetMode",
@@ -61,3 +62,10 @@ class ClientType(enum.StrEnum):
 
     VOICE = "0"
     QUERY = "1"
+
+
+class BanUpdateOp(enum.StrEnum):
+    """``op`` in ``notifybanupdate`` (TS6 ``bans`` event source)."""
+
+    ADD = "add"
+    DEL = "del"

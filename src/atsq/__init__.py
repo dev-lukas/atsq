@@ -2,7 +2,7 @@
 
 from atsq.client import ALL_EVENTS, Client, connect
 from atsq.connection import RawConnection
-from atsq.definitions import LEAVE_REASONS, ClientType, ReasonId, TargetMode
+from atsq.definitions import LEAVE_REASONS, BanUpdateOp, ClientType, ReasonId, TargetMode
 from atsq.dialect import Dialect
 from atsq.errors import (
     ConnectionClosedError,
@@ -15,11 +15,12 @@ from atsq.events import Event
 from atsq.filetransfer import FileTransfer
 from atsq.transport import SshTransport, Transport
 
-__version__ = "1.0.0a4"
+__version__ = "1.0.0a5"
 
 __all__ = [
     "ALL_EVENTS",
     "LEAVE_REASONS",
+    "BanUpdateOp",
     "Client",
     "ClientType",
     "ConnectionClosedError",
