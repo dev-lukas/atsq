@@ -19,6 +19,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+echo "Pulling current server images (a cached TS6 beta stalls once its default license expires)..."
+$compose pull -q
+
 echo "Starting ts3 + ts6..."
 $compose up -d
 
