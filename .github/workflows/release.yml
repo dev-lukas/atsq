@@ -39,7 +39,7 @@ jobs:
             echo "tag ${GITHUB_REF_NAME} != pyproject version ${version}" >&2
             exit 1
           }
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: dist
           path: dist/
@@ -52,7 +52,7 @@ jobs:
     permissions:
       id-token: write  # OIDC for Trusted Publishing
     steps:
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: dist
           path: dist/
