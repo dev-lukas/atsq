@@ -16,7 +16,7 @@ from atsq.filetransfer import FileTransfer
 from atsq.identity import ts3_uid_from_public_key, ts6_uid_from_public_key
 from atsq.transport import SshTransport, Transport
 
-__version__ = "1.0.0a5"
+__version__ = "1.0.0a6"
 
 __all__ = [
     "ALL_EVENTS",
