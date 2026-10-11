@@ -11,7 +11,7 @@
 The successor to [py-ts3](https://github.com/benediktschmitt/py-ts3): an
 asyncio-native ServerQuery client for **TeamSpeak 3 and TeamSpeak 6** over SSH —
 automatic keepalive, reconnect and event dispatch, on modern Python
-(3.12–3.14+). Every release is tested live against real TS3 and TS6 servers.
+(3.12–3.15). Every release is tested live against real TS3 and TS6 servers.
 
 ## Install
 
@@ -144,6 +144,10 @@ except atsq.ConnectionClosedError:  # connection gone
   (`banupdate` events with `op=add|del`); it is skipped on TS3.
   `server_notify_unregister("textserver")` is selective on both generations
   (TS3 drops everything, so atsq re-registers the rest).
+- **TS3 → TS6 identities**: TS6 hashes UIDs with SHA-256 instead of SHA-1, so a
+  user's UID changes. TS6 `clientinfo` reports `client_public_key_raw`; hashing
+  it gives both UIDs, so you can map a TS6 client back to its TS3 history:
+  `atsq.ts3_uid_from_public_key(info["client_public_key_raw"])`.
 - **Snapshots** work via plain `exec("serversnapshotcreate")` /
   `exec("serversnapshotdeploy", version=..., data=...)` — deploy deselects the
   session; call `use` again afterwards.

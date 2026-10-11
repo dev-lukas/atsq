@@ -13,6 +13,7 @@ from atsq.errors import (
 )
 from atsq.events import Event
 from atsq.filetransfer import FileTransfer
+from atsq.identity import ts3_uid_from_public_key, ts6_uid_from_public_key
 from atsq.transport import SshTransport, Transport
 
 __version__ = "1.0.0a5"
@@ -38,4 +39,6 @@ __all__ = [
     "TsqError",
     "__version__",
     "connect",
+    "ts3_uid_from_public_key",
+    "ts6_uid_from_public_key",
 ]
