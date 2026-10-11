@@ -11,7 +11,7 @@
 The successor to [py-ts3](https://github.com/benediktschmitt/py-ts3): an
 asyncio-native ServerQuery client for **TeamSpeak 3 and TeamSpeak 6** over SSH —
 automatic keepalive, reconnect and event dispatch, on modern Python
-(3.12–3.14+). Every release is tested live against real TS3 and TS6 servers.
+(3.12–3.15). Every release is tested live against real TS3 and TS6 servers.
 
 ## Install
 
@@ -101,6 +101,24 @@ data = await ft.download("/file.bin", cid=42)
 rows = await ft.file_list(cid=42, path="/")          # [] for empty dirs
 await ft.delete_file("/file.bin", cid=42)
 ```
+</details>
+
+<details>
+<summary><b>TS3 → TS6 identity mapping</b></summary>
+
+TS6 hashes client UIDs with SHA-256 instead of SHA-1, so the same identity gets
+a new UID and data keyed by TS3 UIDs no longer matches. TS6 `clientinfo` also
+reports the identity's `client_public_key_raw`, and both UIDs are hashes of it:
+
+```python
+info = await ts.client_info(clid)
+key = info["client_public_key_raw"]                   # TS6 only
+assert atsq.ts6_uid_from_public_key(key) == info["client_unique_identifier"]
+legacy_uid = atsq.ts3_uid_from_public_key(key)        # the client's TS3 UID
+```
+
+Verified on TS6 6.0.0-beta13.1 with a real client, over SSH and HTTP query; see
+[dialect findings](docs/dialects.md).
 </details>
 
 <details>
