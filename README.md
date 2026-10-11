@@ -117,7 +117,7 @@ assert atsq.ts6_uid_from_public_key(key) == info["client_unique_identifier"]
 legacy_uid = atsq.ts3_uid_from_public_key(key)        # the client's TS3 UID
 ```
 
-Seen on TS6 6.0.0-beta13.1 with a real client via HTTP query; see
+Verified on TS6 6.0.0-beta13.1 with a real client, over SSH and HTTP query; see
 [dialect findings](docs/dialects.md).
 </details>
 
