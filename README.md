@@ -104,6 +104,24 @@ await ft.delete_file("/file.bin", cid=42)
 </details>
 
 <details>
+<summary><b>TS3 → TS6 identity mapping</b></summary>
+
+TS6 hashes client UIDs with SHA-256 instead of SHA-1, so the same identity gets
+a new UID and data keyed by TS3 UIDs no longer matches. TS6 `clientinfo` also
+reports the identity's `client_public_key_raw`, and both UIDs are hashes of it:
+
+```python
+info = await ts.client_info(clid)
+key = info["client_public_key_raw"]                   # TS6 only
+assert atsq.ts6_uid_from_public_key(key) == info["client_unique_identifier"]
+legacy_uid = atsq.ts3_uid_from_public_key(key)        # the client's TS3 UID
+```
+
+Seen on TS6 6.0.0-beta13.1 with a real client via HTTP query; see
+[dialect findings](docs/dialects.md).
+</details>
+
+<details>
 <summary><b>Error handling</b></summary>
 
 ```python
@@ -144,10 +162,6 @@ except atsq.ConnectionClosedError:  # connection gone
   (`banupdate` events with `op=add|del`); it is skipped on TS3.
   `server_notify_unregister("textserver")` is selective on both generations
   (TS3 drops everything, so atsq re-registers the rest).
-- **TS3 → TS6 identities**: TS6 hashes UIDs with SHA-256 instead of SHA-1, so a
-  user's UID changes. TS6 `clientinfo` reports `client_public_key_raw`; hashing
-  it gives both UIDs, so you can map a TS6 client back to its TS3 history:
-  `atsq.ts3_uid_from_public_key(info["client_public_key_raw"])`.
 - **Snapshots** work via plain `exec("serversnapshotcreate")` /
   `exec("serversnapshotdeploy", version=..., data=...)` — deploy deselects the
   session; call `use` again afterwards.
